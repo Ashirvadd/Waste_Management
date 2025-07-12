@@ -1,0 +1,131 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      UserRole @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  wasteReports     WasteReport[]
+  collectionRequests CollectionRequest[]
+  sessions         Session[]
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model WasteReport {
+  id          String       @id @default(cuid())
+  type        WasteType
+  quantity    Int
+  latitude    Float
+  longitude   Float
+  address     String?
+  description String?
+  priority    Priority     @default(MEDIUM)
+  status      ReportStatus @default(PENDING)
+  imageUrl    String?
+  reportedBy  String
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  // Relations
+  user               User                @relation(fields: [reportedBy], references: [id])
+  collectionRequests CollectionRequest[]
+  aiAnalysis         AIAnalysis[]
+
+  @@map("waste_reports")
+}
+
+model CollectionRequest {
+  id            String    @id @default(cuid())
+  wasteReportId String
+  scheduledDate DateTime
+  notes         String?
+  status        RequestStatus @default(PENDING)
+  requestedBy   String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  wasteReport WasteReport @relation(fields: [wasteReportId], references: [id])
+  user        User        @relation(fields: [requestedBy], references: [id])
+
+  @@map("collection_requests")
+}
+
+model AIAnalysis {
+  id           String   @id @default(cuid())
+  wasteReportId String
+  modelUsed    String
+  confidence   Float
+  wasteType    String
+  analysisData Json
+  createdAt    DateTime @default(now())
+
+  // Relations
+  wasteReport WasteReport @relation(fields: [wasteReportId], references: [id])
+
+  @@map("ai_analyses")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  COLLECTOR
+}
+
+enum WasteType {
+  PLASTIC
+  PAPER
+  GLASS
+  METAL
+  ORGANIC
+  ELECTRONIC
+  OTHER
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ReportStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+} 
