@@ -2,108 +2,61 @@ const express = require('express');
 const multer = require('multer');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const router = express.Router();
 
-// Multer configuration for AI model input
+// Multer configuration for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'ai-inputs/');
+    const uploadDir = 'uploads/yolo';
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'input-' + uniqueSuffix + '.' + file.originalname.split('.').pop());
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.round(Math.random() * 1E9));
+    cb(null, 'yolo-' + uniqueSuffix + '.' + file.originalname.split('.').pop());
   }
 });
 
 const upload = multer({ 
   storage: storage,
   limits: {
-    fileSize: 20 * 1024 * 1024 // 20MB limit for images/videos
+    fileSize: 10 * 1024 * 1024 // 10MB limit
   },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'video/mp4', 'video/avi'];
-    if (allowedTypes.includes(file.mimetype)) {
+    if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
-      cb(new Error('Only image and video files are allowed!'), false);
+      cb(new Error('Only image files are allowed!'), false);
     }
   }
 });
 
-// Waste classification using YOLOv8
-router.post('/classify-waste', upload.single('image'), async (req, res) => {
+// YOLO waste detection endpoint
+router.post('/detect-waste', upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: 'Image file is required' });
+      return res.status(400).json({ error: 'No image file provided' });
     }
 
     const imagePath = req.file.path;
-    const imageName = req.file.filename;
-
-    // Call Python script for YOLOv8 classification
-    const pythonProcess = spawn('python', [
-      path.join(__dirname, '../ml_models/waste_classifier.py'),
-      '--image', imagePath,
-      '--model', 'yolov8n.pt'
-    ]);
-
-    let result = '';
-    let error = '';
-
-    pythonProcess.stdout.on('data', (data) => {
-      result += data.toString();
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-      error += data.toString();
-    });
-
-    pythonProcess.on('close', (code) => {
-      if (code !== 0) {
-        console.error('Python process error:', error);
-        return res.status(500).json({ 
-          error: 'Failed to classify waste',
-          details: error
-        });
-      }
-
-      try {
-        const classificationResult = JSON.parse(result);
-        res.json({
-          message: 'Waste classification completed',
-          image: imageName,
-          results: classificationResult
-        });
-      } catch (parseError) {
-        console.error('Error parsing Python output:', parseError);
-        res.status(500).json({ 
-          error: 'Failed to parse classification results',
-          rawOutput: result
-        });
-      }
-    });
-
-  } catch (error) {
-    console.error('Error in waste classification:', error);
-    res.status(500).json({ error: 'Classification failed' });
-  }
-});
-
-// Waste analysis using Groq API
-router.post('/analyze-waste', upload.single('image'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'Image file is required' });
+    const modelPath = path.join(__dirname, '../ml_models/Waste-Classification-using-YOLOv8-main/Waste-Classification-using-YOLOv8-main/streamlit-detection-tracking - app/weights/best.pt');
+    
+    // Check if model exists
+    if (!fs.existsSync(modelPath)) {
+      return res.status(500).json({ error: 'YOLO model not found' });
     }
 
-    const imagePath = req.file.path;
-    const imageName = req.file.filename;
-
-    // Call Python script for Groq API analysis
+    // Run Python script for waste detection
+    const pythonScript = path.join(__dirname, '../ml_models/waste_classifier.py');
+    
     const pythonProcess = spawn('python', [
-      path.join(__dirname, '../ml_models/waste_analyzer.py'),
+      pythonScript,
       '--image', imagePath,
-      '--api-key', process.env.GROQ_API_KEY || ''
+      '--model', modelPath,
+      '--confidence', '0.2'
     ]);
 
     let result = '';
@@ -118,103 +71,91 @@ router.post('/analyze-waste', upload.single('image'), async (req, res) => {
     });
 
     pythonProcess.on('close', (code) => {
+      console.log('Python process exited with code:', code);
+      console.log('Python stdout:', result);
+      console.log('Python stderr:', error);
+      
       if (code !== 0) {
-        console.error('Python process error:', error);
+        console.error('Python script error:', error);
         return res.status(500).json({ 
-          error: 'Failed to analyze waste',
+          error: 'Failed to process image',
           details: error
         });
       }
 
       try {
-        const analysisResult = JSON.parse(result);
+        // Clean up uploaded file first
+        if (fs.existsSync(imagePath)) {
+          fs.unlinkSync(imagePath);
+        }
+        
+        const detectionResult = JSON.parse(result);
+        
+        // Check if the Python script returned an error
+        if (!detectionResult.success) {
+          return res.status(500).json({ 
+            error: detectionResult.error || 'Detection failed',
+            details: detectionResult
+          });
+        }
+        
         res.json({
-          message: 'Waste analysis completed',
-          image: imageName,
-          analysis: analysisResult
+          success: true,
+          result: detectionResult,
+          imageName: req.file.originalname
         });
       } catch (parseError) {
         console.error('Error parsing Python output:', parseError);
+        console.error('Raw Python output:', result);
         res.status(500).json({ 
-          error: 'Failed to parse analysis results',
-          rawOutput: result
+          error: 'Failed to parse detection results',
+          details: result
         });
       }
     });
 
+    pythonProcess.on('error', (err) => {
+      console.error('Failed to start Python process:', err);
+      res.status(500).json({ error: 'Failed to start detection process' });
+    });
+
   } catch (error) {
-    console.error('Error in waste analysis:', error);
-    res.status(500).json({ error: 'Analysis failed' });
+    console.error('Error in waste detection:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Batch processing for multiple images
-router.post('/batch-classify', upload.array('images', 10), async (req, res) => {
+// Get available model information
+router.get('/models', (req, res) => {
   try {
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ error: 'At least one image is required' });
+    const modelsDir = path.join(__dirname, '../ml_models/Waste-Classification-using-YOLOv8-main/Waste-Classification-using-YOLOv8-main/streamlit-detection-tracking - app/weights');
+    
+    if (!fs.existsSync(modelsDir)) {
+      return res.json({ models: [] });
     }
 
-    const imagePaths = req.files.map(file => file.path);
-    const imageNames = req.files.map(file => file.filename);
+    const models = fs.readdirSync(modelsDir)
+      .filter(file => file.endsWith('.pt') || file.endsWith('.pkl'))
+      .map(file => ({
+        name: file,
+        path: path.join(modelsDir, file),
+        size: fs.statSync(path.join(modelsDir, file)).size
+      }));
 
-    // Call Python script for batch processing
-    const pythonProcess = spawn('python', [
-      path.join(__dirname, '../ml_models/batch_classifier.py'),
-      '--images', JSON.stringify(imagePaths),
-      '--model', 'yolov8n.pt'
-    ]);
-
-    let result = '';
-    let error = '';
-
-    pythonProcess.stdout.on('data', (data) => {
-      result += data.toString();
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-      error += data.toString();
-    });
-
-    pythonProcess.on('close', (code) => {
-      if (code !== 0) {
-        console.error('Python process error:', error);
-        return res.status(500).json({ 
-          error: 'Failed to process batch',
-          details: error
-        });
-      }
-
-      try {
-        const batchResults = JSON.parse(result);
-        res.json({
-          message: 'Batch classification completed',
-          images: imageNames,
-          results: batchResults
-        });
-      } catch (parseError) {
-        console.error('Error parsing Python output:', parseError);
-        res.status(500).json({ 
-          error: 'Failed to parse batch results',
-          rawOutput: result
-        });
-      }
-    });
-
+    res.json({ models });
   } catch (error) {
-    console.error('Error in batch classification:', error);
-    res.status(500).json({ error: 'Batch processing failed' });
+    console.error('Error getting models:', error);
+    res.status(500).json({ error: 'Failed to get model information' });
   }
 });
 
-// Get AI model status and health
-router.get('/status', async (req, res) => {
+// Health check for AI services
+router.get('/health', (req, res) => {
   try {
-    // Check if Python ML models are available
-    const pythonProcess = spawn('python', [
-      path.join(__dirname, '../ml_models/health_check.py')
-    ]);
-
+    const pythonScript = path.join(__dirname, '../ml_models/health_check.py');
+    
+    const pythonProcess = spawn('python', [pythonScript]);
+    
     let result = '';
     let error = '';
 
@@ -227,39 +168,39 @@ router.get('/status', async (req, res) => {
     });
 
     pythonProcess.on('close', (code) => {
-      if (code !== 0) {
-        return res.json({
+      if (code === 0) {
+        try {
+          const healthResult = JSON.parse(result);
+          res.json({
+            status: 'healthy',
+            services: healthResult
+          });
+        } catch (parseError) {
+          res.json({
+            status: 'healthy',
+            message: 'AI services are running'
+          });
+        }
+      } else {
+        res.status(503).json({
           status: 'unhealthy',
-          models: {
-            yolov8: 'unavailable',
-            groq: 'unavailable'
-          },
-          error: error
-        });
-      }
-
-      try {
-        const healthStatus = JSON.parse(result);
-        res.json({
-          status: 'healthy',
-          models: healthStatus,
-          timestamp: new Date().toISOString()
-        });
-      } catch (parseError) {
-        res.json({
-          status: 'unknown',
-          models: {
-            yolov8: 'unknown',
-            groq: 'unknown'
-          },
-          error: 'Failed to parse health check'
+          error: error || 'AI services check failed'
         });
       }
     });
 
+    pythonProcess.on('error', (err) => {
+      res.status(503).json({
+        status: 'unhealthy',
+        error: 'Failed to check AI services'
+      });
+    });
+
   } catch (error) {
-    console.error('Error checking AI status:', error);
-    res.status(500).json({ error: 'Failed to check AI status' });
+    res.status(503).json({
+      status: 'unhealthy',
+      error: 'AI services unavailable'
+    });
   }
 });
 

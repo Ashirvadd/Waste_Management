@@ -14,21 +14,22 @@ import cv2
 import numpy as np
 from PIL import Image
 
-# Waste categories for classification
+# Waste categories for classification - based on actual model training
 WASTE_CATEGORIES = {
-    0: 'plastic',
-    1: 'paper',
+    0: 'biodegradable',
+    1: 'cardboard', 
     2: 'glass',
     3: 'metal',
-    4: 'organic',
-    5: 'electronic',
-    6: 'other'
+    4: 'paper',  # This might be missing from the model output
+    5: 'plastic'
 }
 
 def load_model(model_path='yolov8n.pt'):
     """Load YOLOv8 model for waste classification."""
     try:
+        print(f"Loading model from: {model_path}", file=sys.stderr)
         model = YOLO(model_path)
+        print(f"Model loaded successfully", file=sys.stderr)
         return model
     except Exception as e:
         print(f"Error loading model: {e}", file=sys.stderr)
@@ -37,19 +38,25 @@ def load_model(model_path='yolov8n.pt'):
 def classify_waste(image_path, model):
     """Classify waste in the given image."""
     try:
+        print(f"Processing image: {image_path}", file=sys.stderr)
+        
         # Load and preprocess image
         image = cv2.imread(image_path)
         if image is None:
             raise ValueError(f"Could not load image: {image_path}")
         
+        print(f"Image loaded successfully, shape: {image.shape}", file=sys.stderr)
+        
         # Run inference
         results = model(image)
+        print(f"Inference completed, results: {len(results)}", file=sys.stderr)
         
         # Process results
         detections = []
         for result in results:
             boxes = result.boxes
             if boxes is not None:
+                print(f"Found {len(boxes)} detections", file=sys.stderr)
                 for box in boxes:
                     # Get coordinates
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
@@ -73,6 +80,8 @@ def classify_waste(image_path, model):
                         'area': int((x2 - x1) * (y2 - y1))
                     }
                     detections.append(detection)
+            else:
+                print("No detections found", file=sys.stderr)
         
         # Sort by confidence
         detections.sort(key=lambda x: x['confidence'], reverse=True)
@@ -101,14 +110,18 @@ def classify_waste(image_path, model):
                 waste_summary[waste_type]['total_area'] / count
             )
         
-        return {
+        result = {
             'success': True,
             'detections': detections,
             'summary': waste_summary,
             'total_detections': len(detections)
         }
         
+        print(f"Classification completed: {len(detections)} detections", file=sys.stderr)
+        return result
+        
     except Exception as e:
+        print(f"Error in classify_waste: {e}", file=sys.stderr)
         return {
             'success': False,
             'error': str(e),
@@ -121,40 +134,56 @@ def main():
     parser = argparse.ArgumentParser(description='Waste Classification using YOLOv8')
     parser.add_argument('--image', required=True, help='Path to input image')
     parser.add_argument('--model', default='yolov8n.pt', help='Path to YOLOv8 model')
-    parser.add_argument('--confidence', type=float, default=0.5, help='Confidence threshold')
+    parser.add_argument('--confidence', type=float, default=0.2, help='Confidence threshold')
     
     args = parser.parse_args()
     
-    # Check if image exists
-    if not os.path.exists(args.image):
+    try:
+        # Check if image exists
+        if not os.path.exists(args.image):
+            print(json.dumps({
+                'success': False,
+                'error': f'Image file not found: {args.image}'
+            }))
+            sys.exit(1)
+        
+        # Check if model exists
+        if not os.path.exists(args.model):
+            print(json.dumps({
+                'success': False,
+                'error': f'Model file not found: {args.model}'
+            }))
+            sys.exit(1)
+        
+        # Load model
+        model = load_model(args.model)
+        if model is None:
+            print(json.dumps({
+                'success': False,
+                'error': 'Failed to load YOLOv8 model'
+            }))
+            sys.exit(1)
+        
+        # Classify waste
+        result = classify_waste(args.image, model)
+        
+        # Filter by confidence threshold
+        if result['success']:
+            result['detections'] = [
+                d for d in result['detections'] 
+                if d['confidence'] >= args.confidence
+            ]
+            result['total_detections'] = len(result['detections'])
+        
+        # Output JSON result
+        print(json.dumps(result, indent=2))
+        
+    except Exception as e:
         print(json.dumps({
             'success': False,
-            'error': f'Image file not found: {args.image}'
+            'error': f'Unexpected error: {str(e)}'
         }))
         sys.exit(1)
-    
-    # Load model
-    model = load_model(args.model)
-    if model is None:
-        print(json.dumps({
-            'success': False,
-            'error': 'Failed to load YOLOv8 model'
-        }))
-        sys.exit(1)
-    
-    # Classify waste
-    result = classify_waste(args.image, model)
-    
-    # Filter by confidence threshold
-    if result['success']:
-        result['detections'] = [
-            d for d in result['detections'] 
-            if d['confidence'] >= args.confidence
-        ]
-        result['total_detections'] = len(result['detections'])
-    
-    # Output JSON result
-    print(json.dumps(result, indent=2))
 
 if __name__ == '__main__':
     main() 

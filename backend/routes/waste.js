@@ -1,6 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const Joi = require('joi');
+const prisma = require('../lib/prisma');
 const router = express.Router();
 
 // Multer configuration for file uploads
@@ -9,7 +10,7 @@ const storage = multer.diskStorage({
     cb(null, 'uploads/');
   },
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.round(Math.random() * 1E9));
     cb(null, file.fieldname + '-' + uniqueSuffix + '.' + file.originalname.split('.').pop());
   }
 });
@@ -30,19 +31,17 @@ const upload = multer({
 
 // Validation schemas
 const wasteReportSchema = Joi.object({
-  type: Joi.string().valid('plastic', 'paper', 'glass', 'metal', 'organic', 'electronic', 'other').required(),
+  type: Joi.string().valid('PLASTIC', 'PAPER', 'GLASS', 'METAL', 'ORGANIC', 'ELECTRONIC', 'OTHER').required(),
   quantity: Joi.number().positive().required(),
-  location: Joi.object({
-    latitude: Joi.number().min(-90).max(90).required(),
-    longitude: Joi.number().min(-180).max(180).required(),
-    address: Joi.string().optional()
-  }).required(),
+  latitude: Joi.number().min(-90).max(90).required(),
+  longitude: Joi.number().min(-180).max(180).required(),
+  address: Joi.string().optional(),
   description: Joi.string().max(500).optional(),
-  priority: Joi.string().valid('low', 'medium', 'high', 'urgent').default('medium')
+  priority: Joi.string().valid('LOW', 'MEDIUM', 'HIGH', 'URGENT').default('MEDIUM')
 });
 
 const collectionRequestSchema = Joi.object({
-  wasteId: Joi.string().required(),
+  wasteReportId: Joi.string().required(),
   scheduledDate: Joi.date().min('now').required(),
   notes: Joi.string().max(300).optional()
 });
@@ -50,24 +49,20 @@ const collectionRequestSchema = Joi.object({
 // Get all waste reports
 router.get('/reports', async (req, res) => {
   try {
-    // TODO: Fetch from database with pagination
-    const reports = [
-      {
-        id: '1',
-        type: 'plastic',
-        quantity: 50,
-        location: {
-          latitude: 40.7128,
-          longitude: -74.0060,
-          address: '123 Main St, New York, NY'
-        },
-        description: 'Plastic bottles and containers',
-        priority: 'medium',
-        status: 'pending',
-        reportedBy: 'user123',
-        createdAt: new Date().toISOString()
+    const reports = await prisma.wasteReport.findMany({
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        }
+      },
+      orderBy: {
+        createdAt: 'desc'
       }
-    ];
+    });
 
     res.json({
       reports,
@@ -91,19 +86,27 @@ router.post('/reports', upload.single('image'), async (req, res) => {
 
     const reportData = {
       ...value,
-      id: Date.now().toString(),
       imageUrl: req.file ? `/uploads/${req.file.filename}` : null,
-      status: 'pending',
-      reportedBy: req.user?.userId || 'anonymous',
-      createdAt: new Date().toISOString()
+      status: 'PENDING',
+      reportedBy: req.user?.userId || 'anonymous'
     };
 
-    // TODO: Save to database
-    console.log('New waste report:', reportData);
+    const newReport = await prisma.wasteReport.create({
+      data: reportData,
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        }
+      }
+    });
 
     res.status(201).json({
       message: 'Waste report created successfully',
-      report: reportData
+      report: newReport
     });
   } catch (error) {
     console.error('Error creating waste report:', error);
@@ -116,22 +119,18 @@ router.get('/reports/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    // TODO: Fetch from database
-    const report = {
-      id,
-      type: 'plastic',
-      quantity: 50,
-      location: {
-        latitude: 40.7128,
-        longitude: -74.0060,
-        address: '123 Main St, New York, NY'
-      },
-      description: 'Plastic bottles and containers',
-      priority: 'medium',
-      status: 'pending',
-      reportedBy: 'user123',
-      createdAt: new Date().toISOString()
-    };
+    const report = await prisma.wasteReport.findUnique({
+      where: { id },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        }
+      }
+    });
 
     if (!report) {
       return res.status(404).json({ error: 'Waste report not found' });
@@ -150,17 +149,27 @@ router.patch('/reports/:id/status', async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
 
-    if (!['pending', 'in-progress', 'completed', 'cancelled'].includes(status)) {
+    if (!['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'].includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
 
-    // TODO: Update in database
-    console.log(`Updating report ${id} status to ${status}`);
+    const updatedReport = await prisma.wasteReport.update({
+      where: { id },
+      data: { status },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        }
+      }
+    });
 
     res.json({
       message: 'Status updated successfully',
-      reportId: id,
-      status
+      report: updatedReport
     });
   } catch (error) {
     console.error('Error updating waste report status:', error);
@@ -178,18 +187,37 @@ router.post('/collection-requests', async (req, res) => {
 
     const requestData = {
       ...value,
-      id: Date.now().toString(),
-      status: 'pending',
-      requestedBy: req.user?.userId || 'anonymous',
-      createdAt: new Date().toISOString()
+      status: 'PENDING',
+      requestedBy: req.user?.userId || 'anonymous'
     };
 
-    // TODO: Save to database
-    console.log('New collection request:', requestData);
+    const newRequest = await prisma.collectionRequest.create({
+      data: requestData,
+      include: {
+        wasteReport: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true
+              }
+            }
+          }
+        },
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        }
+      }
+    });
 
     res.status(201).json({
       message: 'Collection request created successfully',
-      request: requestData
+      request: newRequest
     });
   } catch (error) {
     console.error('Error creating collection request:', error);
@@ -200,17 +228,31 @@ router.post('/collection-requests', async (req, res) => {
 // Get collection requests
 router.get('/collection-requests', async (req, res) => {
   try {
-    // TODO: Fetch from database with filters
-    const requests = [
-      {
-        id: '1',
-        wasteId: 'waste123',
-        scheduledDate: new Date(Date.now() + 86400000).toISOString(), // Tomorrow
-        status: 'pending',
-        requestedBy: 'user123',
-        createdAt: new Date().toISOString()
+    const requests = await prisma.collectionRequest.findMany({
+      include: {
+        wasteReport: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true
+              }
+            }
+          }
+        },
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        }
+      },
+      orderBy: {
+        createdAt: 'desc'
       }
-    ];
+    });
 
     res.json({
       requests,
