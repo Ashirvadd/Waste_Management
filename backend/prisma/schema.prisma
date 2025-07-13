@@ -1,0 +1,85 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      UserRole @default(CITIZEN)
+
+  uploads    Upload[]
+  conflicts  Conflict[]
+  wards      Ward[]
+  @@map("users")
+}
+
+model Ward {
+  id          String @id @default(cuid())
+  wardId      String @unique
+  collectorId String
+  collector   User   @relation(fields: [collectorId], references: [id])
+
+  houses      House[]
+  @@map("wards")
+}
+
+model House {
+  id           String   @id @default(cuid())
+  wardNo       String
+  address      String
+  wardId       String?
+  ward         Ward?    @relation(fields: [wardId], references: [id])
+
+  uploads   Upload[]
+  conflicts Conflict[]
+
+  @@map("houses")
+}
+
+model Upload {
+  id         String   @id @default(cuid())
+  collector  User     @relation(fields: [collectorId], references: [id])
+  collectorId String
+  house       House   @relation(fields: [houseId], references: [id])
+  houseId     String
+  timestamp   DateTime @default(now())
+
+  @@map("uploads")
+}
+
+model Conflict {
+  id          String        @id @default(cuid())
+  collector   User          @relation(fields: [collectorId], references: [id])
+  collectorId String
+  house       House         @relation(fields: [houseId], references: [id])
+  houseId     String
+  image       String
+  status      ConflictStatus @default(PENDING)
+  timestamp   DateTime      @default(now())
+  resolvedAt  DateTime?
+  resolvedBy  String?
+
+  @@map("conflicts")
+}
+
+enum UserRole {
+  COLLECTOR
+  CITIZEN
+  ADMIN
+}
+
+enum ConflictStatus {
+  PENDING
+  RESOLVED
+  REJECTED
+} 
